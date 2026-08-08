@@ -20,6 +20,10 @@ export const CLEAR_IDLE_THRESHOLD_MS = 2000;
 
 // ── External Session Detection ──────────────────────────────
 export const EXTERNAL_SCAN_INTERVAL_MS = 3000;
+
+/** How often the roster is re-read. Seats change on human timescales (someone
+ *  is hired, a run starts), so this is deliberately slower than session scanning. */
+export const ROSTER_POLL_INTERVAL_MS = 2000;
 /** Only adopt JSONL files modified within this window */
 export const EXTERNAL_ACTIVE_THRESHOLD_MS = 120_000; // 2 minutes
 /** Remove external agents after this much inactivity */

@@ -13,8 +13,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { HookProvider } from '../../core/src/provider.js';
+import type { RosterSource } from '../../core/src/roster.js';
 import type { AgentStateStore } from './agentStateStore.js';
-import { DEFAULT_MAX_CONTEXT_TOKENS } from './constants.js';
+import { DEFAULT_MAX_CONTEXT_TOKENS, ROSTER_POLL_INTERVAL_MS } from './constants.js';
 import { DismissalTracker } from './dismissalTracker.js';
 import {
   adoptExternalSessionFromHook,
@@ -39,6 +40,7 @@ import { HookEventHandler } from './hookEventHandler.js';
 import { assignPaletteIfNeeded } from './paletteAssigner.js';
 import { PathSet, pathsMatch } from './pathKey.js';
 import { ProviderRegistry } from './providerRegistry.js';
+import { RosterSeating } from './rosterSeating.js';
 import { SessionRouter } from './sessionRouter.js';
 import { SubagentWatch } from './subagentWatch.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
@@ -73,6 +75,8 @@ export class AgentRuntime {
   readonly projectScanTimer = { current: null as ReturnType<typeof setInterval> | null };
   readonly activeAgentId = { current: null as number | null };
   private externalScanTimer: ReturnType<typeof setInterval> | null = null;
+  private rosterTimer: ReturnType<typeof setInterval> | null = null;
+  private rosterSeating: RosterSeating | null = null;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   // Configuration refs (mutable, shared with scanners)
@@ -568,7 +572,44 @@ export class AgentRuntime {
   // ── Cleanup ──
 
   /** Clean up all scanners, timers, and agents. Called on shutdown. */
+  /**
+   * Seat a roster and keep it current.
+   *
+   * Optional: without a roster source the office stays session-driven, which is
+   * the upstream behavior. With one, employees are seated permanently and their
+   * appearance follows seat state, so an idle employee is visible rather than
+   * absent.
+   *
+   * A source that throws is skipped for that tick rather than allowed to kill
+   * the interval — the roster is a view, and losing it must not stop the office.
+   */
+  startRoster(source: RosterSource, intervalMs = ROSTER_POLL_INTERVAL_MS): void {
+    if (this.rosterTimer) return;
+    const seating = new RosterSeating(this.store);
+    this.rosterSeating = seating;
+
+    const tick = async (): Promise<void> => {
+      try {
+        seating.reconcile(await source.listSeats());
+      } catch (e) {
+        console.warn('[Pixel Agents] Roster: skipping tick —', e);
+      }
+    };
+    void tick();
+    this.rosterTimer = setInterval(() => void tick(), intervalMs);
+  }
+
+  /** Seat id behind an agent, or undefined for session-owned agents. Lets a host
+   *  route an office action back to the roster entry it belongs to. */
+  seatIdForAgent(agentId: number): string | undefined {
+    return this.rosterSeating?.seatIdFor(agentId);
+  }
+
   dispose(): void {
+    if (this.rosterTimer) {
+      clearInterval(this.rosterTimer);
+      this.rosterTimer = null;
+    }
     this.hookEventHandler.dispose();
     this.subagentWatch.dispose();
 
