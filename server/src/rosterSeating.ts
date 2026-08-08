@@ -28,10 +28,14 @@ interface SeatedAgent {
   agentId: number;
   state: SeatState;
   activity: string | undefined;
+  title: string;
+  reportsTo: string | null;
 }
 
 export class RosterSeating {
   private readonly seated = new Map<string, SeatedAgent>();
+  /** Serialized last-sent seat map, so an unchanged roster is not re-broadcast. */
+  private lastSeatMap = '';
 
   constructor(private readonly agents: AgentStateStore) {}
 
@@ -52,6 +56,35 @@ export class RosterSeating {
     for (const seatId of [...this.seated.keys()]) {
       if (!staffedIds.has(seatId)) this.vacate(seatId);
     }
+
+    // Tell the office which characters are employees. Without it the UI cannot
+    // distinguish a seat from a walk-in, and would offer actions on characters
+    // no orchestrator can act upon.
+    const snapshot = JSON.stringify(this.seatMap());
+    if (snapshot !== this.lastSeatMap) {
+      this.lastSeatMap = snapshot;
+      this.agents.broadcast({ type: 'rosterSeats', seats: this.seatMap() });
+    }
+  }
+
+  /** Agent id (as a string key) to the seat behind it. */
+  private seatMap(): Record<
+    string,
+    { seatId: string; title: string; state: SeatState; reportsTo?: string }
+  > {
+    const map: Record<
+      string,
+      { seatId: string; title: string; state: SeatState; reportsTo?: string }
+    > = {};
+    for (const [seatId, entry] of this.seated) {
+      map[String(entry.agentId)] = {
+        seatId,
+        title: entry.title,
+        state: entry.state,
+        ...(entry.reportsTo !== null ? { reportsTo: entry.reportsTo } : {}),
+      };
+    }
+    return map;
   }
 
   /**
@@ -66,6 +99,8 @@ export class RosterSeating {
    * so replaying it would beep once per idle employee on every page load.
    */
   replayTo(send: (message: Record<string, unknown>) => void): void {
+    send({ type: 'rosterSeats', seats: this.seatMap() });
+
     for (const entry of this.seated.values()) {
       if (entry.state !== 'working' && entry.state !== 'stuck') continue;
 
@@ -136,7 +171,13 @@ export class RosterSeating {
 
     // Record before applying state so the transition below is computed against
     // a known-empty starting point rather than the incoming state itself.
-    const entry: SeatedAgent = { agentId, state: 'off', activity: undefined };
+    const entry: SeatedAgent = {
+      agentId,
+      state: 'off',
+      activity: undefined,
+      title: seat.title,
+      reportsTo: seat.reportsTo,
+    };
     this.seated.set(seat.id, entry);
     this.applyState(seat, entry);
   }
@@ -158,6 +199,8 @@ export class RosterSeating {
 
     entry.state = seat.state;
     entry.activity = seat.activity;
+    entry.title = seat.title;
+    entry.reportsTo = seat.reportsTo;
 
     if (seat.state === 'idle') {
       this.goIdle(entry.agentId, agent);

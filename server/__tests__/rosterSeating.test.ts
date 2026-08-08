@@ -145,6 +145,15 @@ describe('RosterSeating', () => {
       expect(broadcasts).toHaveLength(0);
     });
 
+    it('announces the seat map when a seat changes state', () => {
+      seating.reconcile([seat({ state: 'idle' })]);
+      broadcasts.length = 0;
+
+      seating.reconcile([seat({ state: 'working', activity: 'x' })]);
+
+      expect(broadcasts).toContainEqual(expect.objectContaining({ type: 'rosterSeats' }));
+    });
+
     it('announces a changed activity within the same working state', () => {
       seating.reconcile([seat({ state: 'working', activity: 'Fixing the map' })]);
       broadcasts.length = 0;
@@ -222,14 +231,27 @@ describe('RosterSeating', () => {
       expect(replay()).toContainEqual(expect.objectContaining({ type: 'agentToolPermission' }));
     });
 
-    it('does not replay idle seats — a character with no tool already reads as idle, and replaying would ring the chime', () => {
+    it('does not replay idle status — a character with no tool already reads as idle, and replaying would ring the chime', () => {
       seating.reconcile([seat({ state: 'idle' })]);
 
-      expect(replay()).toHaveLength(0);
+      expect(replay().some((m) => m.type === 'agentStatus')).toBe(false);
     });
 
-    it('replays nothing when nobody is seated', () => {
-      expect(replay()).toHaveLength(0);
+    it('always names the seats, so the office knows who is an employee', () => {
+      seating.reconcile([seat({ state: 'idle' })]);
+
+      expect(replay()).toContainEqual(
+        expect.objectContaining({
+          type: 'rosterSeats',
+          seats: { '1': { seatId: 'shipper', title: 'Engineer', state: 'idle', reportsTo: 'ops' } },
+        }),
+      );
+    });
+
+    it('replays only the seat map when nobody is working or stuck', () => {
+      seating.reconcile([seat({ state: 'idle' })]);
+
+      expect(replay().map((m) => m.type)).toEqual(['rosterSeats']);
     });
 
     it('sends to the given client only, without broadcasting to everyone', () => {

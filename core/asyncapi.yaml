@@ -116,6 +116,7 @@ components:
         - $ref: '#/components/schemas/WorkspaceFolders'
         # Diagnostics
         - $ref: '#/components/schemas/AgentDiagnostics'
+        - $ref: '#/components/schemas/RosterSeats'
       discriminator: type
 
     ClientMessage:
@@ -141,6 +142,7 @@ components:
         - $ref: '#/components/schemas/SaveAreaMappings'
         - $ref: '#/components/schemas/SetShowAreas'
         - $ref: '#/components/schemas/RequestDiagnostics'
+        - $ref: '#/components/schemas/SeatAction'
       discriminator: type
 
     # ── Server message variants ────────────────────────────────────
@@ -760,6 +762,63 @@ components:
           const: focusAgent
         id:
           type: integer
+
+    RosterSeatInfo:
+      description: One roster employee, as the office needs to label and act on it.
+      type: object
+      additionalProperties: false
+      required: [seatId, title, state]
+      properties:
+        seatId:
+          type: string
+        title:
+          type: string
+        state:
+          type: string
+          enum: [idle, working, stuck]
+        reportsTo:
+          type: string
+          description: Seat this one reports to. Absent means it reports to the operator.
+
+    RosterSeats:
+      description: >
+        Which characters are roster employees rather than walk-in sessions, so the
+        office can offer actions only where an orchestrator can carry them out.
+      type: object
+      additionalProperties: false
+      required: [type, seats]
+      properties:
+        type:
+          const: rosterSeats
+        seats:
+          type: object
+          description: Map of agent id (string) to seat info.
+          additionalProperties:
+            $ref: '#/components/schemas/RosterSeatInfo'
+
+    SeatAction:
+      description: >
+        Act on a roster employee. Routed by the server to whatever orchestrator
+        owns the roster; the office never performs the action itself, so a new
+        orchestrator needs no UI change.
+      type: object
+      additionalProperties: false
+      required: [type, id, action]
+      properties:
+        type:
+          const: seatAction
+        id:
+          type: integer
+          description: Agent id of the seated employee.
+        action:
+          type: string
+          enum: [startWork, resolveStuck]
+          description: >
+            startWork gives the employee a job; resolveStuck marks what it is
+            waiting on as answered.
+        task:
+          type: string
+          description: The job to do. Required by startWork, ignored otherwise.
 
     CloseAgent:
       description: Close (dismiss) an agent.

@@ -40,6 +40,7 @@ import { HookEventHandler } from './hookEventHandler.js';
 import { assignPaletteIfNeeded } from './paletteAssigner.js';
 import { PathSet, pathsMatch } from './pathKey.js';
 import { ProviderRegistry } from './providerRegistry.js';
+import type { RosterActions } from './rosterActions.js';
 import { RosterSeating } from './rosterSeating.js';
 import { SessionRouter } from './sessionRouter.js';
 import { SubagentWatch } from './subagentWatch.js';
@@ -77,6 +78,7 @@ export class AgentRuntime {
   private externalScanTimer: ReturnType<typeof setInterval> | null = null;
   private rosterTimer: ReturnType<typeof setInterval> | null = null;
   private rosterSeating: RosterSeating | null = null;
+  private rosterActions: RosterActions | null = null;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   // Configuration refs (mutable, shared with scanners)
@@ -583,7 +585,12 @@ export class AgentRuntime {
    * A source that throws is skipped for that tick rather than allowed to kill
    * the interval — the roster is a view, and losing it must not stop the office.
    */
-  startRoster(source: RosterSource, intervalMs = ROSTER_POLL_INTERVAL_MS): void {
+  startRoster(
+    source: RosterSource,
+    actions?: RosterActions,
+    intervalMs = ROSTER_POLL_INTERVAL_MS,
+  ): void {
+    this.rosterActions = actions ?? null;
     if (this.rosterTimer) return;
     const seating = new RosterSeating(this.store);
     this.rosterSeating = seating;
@@ -597,6 +604,30 @@ export class AgentRuntime {
     };
     void tick();
     this.rosterTimer = setInterval(() => void tick(), intervalMs);
+  }
+
+  /**
+   * Perform an office action on a seated employee.
+   *
+   * Resolves to false when the agent is not a roster seat or no action channel
+   * is configured, so a click on a walk-in cannot be mistaken for a command to
+   * the orchestrator.
+   */
+  async runSeatAction(
+    agentId: number,
+    action: 'startWork' | 'resolveStuck',
+    task?: string,
+  ): Promise<boolean> {
+    const seatId = this.rosterSeating?.seatIdFor(agentId);
+    if (seatId === undefined || this.rosterActions === null) return false;
+
+    if (action === 'startWork') {
+      if (task === undefined || task.trim() === '') return false;
+      await this.rosterActions.startWork(seatId, task);
+      return true;
+    }
+    await this.rosterActions.resolveStuck(seatId);
+    return true;
   }
 
   /** Re-send roster state to a freshly connected client. No-op without a roster. */

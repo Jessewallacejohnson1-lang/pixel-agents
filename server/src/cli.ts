@@ -24,6 +24,7 @@ import { MAX_PORT, MIN_PORT } from './constants.js';
 import { FileStateAdapter } from './fileStateAdapter.js';
 import { HttpRosterSource } from './httpRosterSource.js';
 import { claudeProvider, codexProvider, copyHookScript } from './providers/index.js';
+import { HttpRosterActions } from './rosterActions.js';
 import { PixelAgentsServer } from './server.js';
 
 // ── Argument parsing ──────────────────────────────────────────
@@ -244,7 +245,13 @@ async function main(): Promise<void> {
     // An orchestrator's roster turns the office from a view of live sessions
     // into a staff room: employees keep their desks between runs.
     if (args.rosterUrl) {
-      runtime.startRoster(new HttpRosterSource(args.rosterUrl, args.rosterToken));
+      // Actions go to the same API the roster came from: everything up to the
+      // last path segment is its root.
+      const apiRoot = args.rosterUrl.replace(/\/office\/seats\/?$/, '');
+      runtime.startRoster(
+        new HttpRosterSource(args.rosterUrl, args.rosterToken),
+        new HttpRosterActions(apiRoot, args.rosterToken),
+      );
       console.log(`[Pixel Agents] Roster: seating employees from ${args.rosterUrl}`);
     }
 

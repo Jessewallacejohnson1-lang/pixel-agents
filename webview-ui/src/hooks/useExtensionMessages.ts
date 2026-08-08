@@ -67,8 +67,19 @@ export interface WorkspaceFolder {
   path: string;
 }
 
+/** A roster employee, keyed by the agent id of its character. */
+export interface RosterSeatInfo {
+  seatId: string;
+  title: string;
+  state: 'idle' | 'working' | 'stuck';
+  reportsTo?: string;
+}
+
 interface ExtensionMessageState {
   agents: number[];
+  /** Characters that are roster employees. Walk-in sessions are absent, so the
+   *  UI only offers actions an orchestrator can actually carry out. */
+  rosterSeats: Record<number, RosterSeatInfo>;
   selectedAgent: number | null;
   agentTools: Record<number, ToolActivity[]>;
   agentStatuses: Record<number, string>;
@@ -116,6 +127,7 @@ export function useExtensionMessages(
   const [selectedAgent, setSelectedAgent] = useState<number | null>(null);
   const [agentTools, setAgentTools] = useState<Record<number, ToolActivity[]>>({});
   const [agentStatuses, setAgentStatuses] = useState<Record<number, string>>({});
+  const [rosterSeats, setRosterSeats] = useState<Record<number, RosterSeatInfo>>({});
   const [subagentTools, setSubagentTools] = useState<
     Record<number, Record<string, ToolActivity[]>>
   >({});
@@ -683,6 +695,11 @@ export function useExtensionMessages(
           msg.leadAgentId as number | undefined,
           msg.teamUsesTmux as boolean | undefined,
         );
+      } else if (msg.type === 'rosterSeats') {
+        const raw = msg.seats as Record<string, RosterSeatInfo>;
+        const byId: Record<number, RosterSeatInfo> = {};
+        for (const [id, info] of Object.entries(raw)) byId[Number(id)] = info;
+        setRosterSeats(byId);
       } else if (msg.type === 'agentContextUsage') {
         const id = msg.id as number;
         os.setAgentContext(id, msg.contextTokens as number, msg.maxContextTokens as number);
@@ -711,6 +728,7 @@ export function useExtensionMessages(
 
   return {
     agents,
+    rosterSeats,
     selectedAgent,
     agentTools,
     agentStatuses,

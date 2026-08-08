@@ -7,6 +7,7 @@ import { ConnectionIndicator } from './components/ConnectionIndicator.js';
 import { DebugView } from './components/DebugView.js';
 import { EditActionBar } from './components/EditActionBar.js';
 import { MigrationNotice } from './components/MigrationNotice.js';
+import { SeatActionBar } from './components/SeatActionBar.js';
 import { SettingsModal } from './components/SettingsModal.js';
 import { Tooltip } from './components/Tooltip.js';
 import { Modal } from './components/ui/Modal.js';
@@ -66,6 +67,7 @@ function App() {
 
   const {
     agents,
+    rosterSeats,
     selectedAgent,
     agentTools,
     agentStatuses,
@@ -212,11 +214,35 @@ function App() {
     transport.send({ type: 'closeAgent', id });
   }, []);
 
+  // handleClick is a stable callback (empty deps), so it cannot close over
+  // rosterSeats directly without going stale. A ref keeps it current.
+  const rosterSeatsRef = useRef(rosterSeats);
+  rosterSeatsRef.current = rosterSeats;
+
+  // Which employee's action bar is open. Cleared when its character stops being
+  // a roster seat, so the bar cannot outlive the person it acts on.
+  const [actionSeatId, setActionSeatId] = useState<number | null>(null);
+  useEffect(() => {
+    if (actionSeatId !== null && rosterSeats[actionSeatId] === undefined) setActionSeatId(null);
+  }, [actionSeatId, rosterSeats]);
+
+  const handleSeatAction = useCallback(
+    (id: number, action: 'startWork' | 'resolveStuck', task?: string) => {
+      transport.send({ type: 'seatAction', id, action, ...(task !== undefined ? { task } : {}) });
+    },
+    [],
+  );
+
   const handleClick = useCallback((agentId: number) => {
     // If clicked agent is a sub-agent, focus the parent's terminal instead
     const os = getOfficeState();
     const meta = os.subagentMeta.get(agentId);
     const focusId = meta ? meta.parentAgentId : agentId;
+    // A roster employee has no terminal to focus; clicking it opens its actions.
+    if (rosterSeatsRef.current[focusId] !== undefined) {
+      setActionSeatId(focusId);
+      return;
+    }
     transport.send({ type: 'focusAgent', id: focusId });
   }, []);
 
@@ -344,6 +370,15 @@ function App() {
 
           {editor.isEditMode && editor.isDirty && (
             <EditActionBar editor={editor} editorState={editorState} />
+          )}
+
+          {actionSeatId !== null && rosterSeats[actionSeatId] && (
+            <SeatActionBar
+              seat={rosterSeats[actionSeatId]}
+              onStartWork={(task) => handleSeatAction(actionSeatId, 'startWork', task)}
+              onResolveStuck={() => handleSeatAction(actionSeatId, 'resolveStuck')}
+              onDismiss={() => setActionSeatId(null)}
+            />
           )}
 
           {showRotateHint && (

@@ -36,7 +36,8 @@ export type ServerMessage =
   | ExternalAssetDirectoriesUpdated
   | AreaMappingsLoaded
   | WorkspaceFolders
-  | AgentDiagnostics;
+  | AgentDiagnostics
+  | RosterSeats;
 
 export type ClientMessage =
   | WebviewReady
@@ -59,7 +60,8 @@ export type ClientMessage =
   | RemoveExternalAssetDirectory
   | SaveAreaMappings
   | SetShowAreas
-  | RequestDiagnostics;
+  | RequestDiagnostics
+  | SeatAction;
 
 export interface ProviderCapabilities {
   type: 'providerCapabilities';
@@ -299,6 +301,20 @@ export interface AgentDiagnostics {
   agents: Record<string, any>[];
 }
 
+export interface RosterSeats {
+  type: 'rosterSeats';
+  seats: Record<string, RosterSeatInfo>;
+}
+
+export interface RosterSeatInfo {
+  seatId: string;
+  title: string;
+  state: AnonymousSchema_189;
+  reportsTo?: string;
+}
+
+export type AnonymousSchema_189 = 'idle' | 'working' | 'stuck';
+
 export interface WebviewReady {
   type: 'webviewReady';
 }
@@ -404,3 +420,12 @@ export interface SetShowAreas {
 export interface RequestDiagnostics {
   type: 'requestDiagnostics';
 }
+
+export interface SeatAction {
+  type: 'seatAction';
+  id: number;
+  action: AnonymousSchema_235;
+  task?: string;
+}
+
+export type AnonymousSchema_235 = 'startWork' | 'resolveStuck';

@@ -84,6 +84,19 @@ export function handleClientMessage(
       break;
     }
 
+    case 'seatAction': {
+      const id = typeof msg.id === 'number' ? msg.id : undefined;
+      const action = msg.action;
+      if (id === undefined || (action !== 'startWork' && action !== 'resolveStuck')) break;
+      const task = typeof msg.task === 'string' ? msg.task : undefined;
+      // Fire-and-report: the click must not block on the orchestrator, but a
+      // failure has to reach the log rather than vanish.
+      void runtime
+        ?.runSeatAction(id, action, task)
+        .catch((e: unknown) => console.warn(`[Pixel Agents] Seat action ${action} failed:`, e));
+      break;
+    }
+
     case 'requestDiagnostics':
       // Point-to-point reply to the requesting socket (NOT a broadcast).
       send({ type: 'agentDiagnostics', agents: buildAgentDiagnostics(store) });
