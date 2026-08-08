@@ -46,6 +46,7 @@ import { seedContextUsage } from './contextUsage.js';
 import type { DismissalTracker } from './dismissalTracker.js';
 import { assignPaletteIfNeeded } from './paletteAssigner.js';
 import { pathsMatch } from './pathKey.js';
+import type { ProviderRegistry } from './providerRegistry.js';
 import type { SubagentWatch } from './subagentWatch.js';
 import { cancelPermissionTimer, cancelWaitingTimer, clearAgentActivity } from './timerManager.js';
 import { getHookProvider, processTranscriptLine } from './transcriptParser.js';
@@ -403,11 +404,7 @@ export function scanForNewJsonlFiles(
     // Cast to vscode.Terminal because the adapter returns the real object at runtime;
     // the TerminalHandle type is the minimal interface for the adapter contract.
     const activeTerminal = terminalAdapter?.activeTerminal() as vscode.Terminal | undefined;
-    if (
-      activeTerminal &&
-      hookProvider?.terminalNamePrefix &&
-      activeTerminal.name.startsWith(hookProvider.terminalNamePrefix)
-    ) {
+    if (activeTerminal && matchesAnyProviderTerminal(activeTerminal.name)) {
       let owned = false;
       for (const agent of agents.values()) {
         if (agent.terminalRef === activeTerminal) {
@@ -435,11 +432,7 @@ export function scanForNewJsonlFiles(
         // Only adopt terminals with TERMINAL_NAME_PREFIX to avoid grabbing
         // pre-existing shells ("zsh", "bash") for /clear files.
         for (const terminal of (terminalAdapter?.allTerminals() ?? []) as vscode.Terminal[]) {
-          if (
-            !hookProvider?.terminalNamePrefix ||
-            !terminal.name.startsWith(hookProvider.terminalNamePrefix)
-          )
-            continue;
+          if (!matchesAnyProviderTerminal(terminal.name)) continue;
           let owned = false;
           for (const agent of agents.values()) {
             if (agent.terminalRef === terminal) {
@@ -568,7 +561,7 @@ let teamProvider: TeamProvider | null = null;
 
 /** Hook provider: supplies non-team capabilities fileWatcher needs (all-session
  *  roots for global discovery, launch command, etc.). Set once at startup. */
-let hookProvider: HookProvider | null = null;
+let providerRegistry: ProviderRegistry | null = null;
 
 /** Register the callback used to remove teammates detected as dismissed via team config polling. */
 export function setTeammateRemovalCallback(cb: (teammateAgentId: number) => void): void {
@@ -602,9 +595,25 @@ export function setSubagentWatch(watch: SubagentWatch | null): void {
   subagentWatch = watch;
 }
 
-/** Register the active HookProvider for non-team capabilities (session roots, etc.). */
-export function setHookProvider(provider: HookProvider): void {
-  hookProvider = provider;
+/** Register the providers this runtime dispatches to (session roots, terminal
+ *  matching, per-agent tool classification). */
+export function setHookProvider(registry: ProviderRegistry): void {
+  providerRegistry = registry;
+}
+
+/** True when a terminal name matches any registered provider's prefix. Terminal
+ *  adoption must recognize every CLI the runtime tracks, not just the first. */
+function matchesAnyProviderTerminal(terminalName: string): boolean {
+  return (providerRegistry?.all() ?? []).some(
+    (p) => p.terminalNamePrefix && terminalName.startsWith(p.terminalNamePrefix),
+  );
+}
+
+/** Provider that owns an agent, falling back to the default for agents adopted
+ *  before provider ids were tracked. */
+function providerFor(agent: { providerId?: string }): HookProvider | null {
+  if (!providerRegistry) return null;
+  return providerRegistry.get(agent.providerId) ?? providerRegistry.default;
 }
 
 /**
@@ -794,7 +803,7 @@ function liveSpawnToolIds(lead: AgentState): Set<string> {
   const ids = new Set(lead.backgroundAgentToolIds);
   for (const toolId of lead.activeToolIds) {
     const toolName = lead.activeToolNames.get(toolId);
-    if (toolName && hookProvider?.subagentToolNames.has(toolName)) {
+    if (toolName && providerFor(lead)?.subagentToolNames.has(toolName)) {
       ids.add(toolId);
     }
   }
@@ -1484,23 +1493,26 @@ function scanGlobalProjectDirs(
 
   persistAgents: () => void,
 ): void {
-  const roots = hookProvider?.getAllSessionRoots?.() ?? [];
-  if (roots.length === 0) return;
-
-  const projectDirs: string[] = [];
-  for (const root of roots) {
-    try {
-      const entries = fs.readdirSync(root, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) projectDirs.push(path.join(root, entry.name));
+  // Track which provider each directory came from: the provider decides how a
+  // session in it is labeled, and (once wired) how its lines are parsed.
+  const projectDirs: { dirPath: string; provider: HookProvider }[] = [];
+  for (const provider of providerRegistry?.all() ?? []) {
+    for (const root of provider.getAllSessionRoots?.() ?? []) {
+      try {
+        const entries = fs.readdirSync(root, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory())
+            projectDirs.push({ dirPath: path.join(root, entry.name), provider });
+        }
+      } catch {
+        // root missing / unreadable -> skip
       }
-    } catch {
-      // root missing / unreadable -> skip
     }
   }
+  if (projectDirs.length === 0) return;
 
   const now = Date.now();
-  for (const dirPath of projectDirs) {
+  for (const { dirPath, provider } of projectDirs) {
     // Skip directories already tracked by workspace scanning
     if (isTrackedProjectDir(dirPath)) continue;
 
@@ -1533,9 +1545,16 @@ function scanGlobalProjectDirs(
         continue;
       }
 
+      // Providers whose sessions aren't stored under a path-derived directory
+      // (Codex: sessions/<YYYY>/<MM>/<DD>/) report their cwd from inside the
+      // transcript. Without this, every Codex agent would be labeled with a day
+      // number.
+      const transcriptCwd = provider.sessionCwdFromTranscript?.(file);
       const folderName =
-        folderNameResolver?.({ projectDir: dirPath }) ??
-        folderNameFromProjectDir(path.basename(dirPath));
+        folderNameResolver?.({ cwd: transcriptCwd, projectDir: dirPath }) ??
+        (transcriptCwd
+          ? path.basename(transcriptCwd)
+          : folderNameFromProjectDir(path.basename(dirPath)));
       knownJsonlFiles.add(file);
       console.log(
         `[Pixel Agents] Watcher: detected global session ${path.basename(file)} (${folderName})`,

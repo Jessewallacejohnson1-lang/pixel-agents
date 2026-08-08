@@ -38,6 +38,7 @@ import type { HookEvent } from './hookEventHandler.js';
 import { HookEventHandler } from './hookEventHandler.js';
 import { assignPaletteIfNeeded } from './paletteAssigner.js';
 import { PathSet, pathsMatch } from './pathKey.js';
+import { ProviderRegistry } from './providerRegistry.js';
 import { SessionRouter } from './sessionRouter.js';
 import { SubagentWatch } from './subagentWatch.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
@@ -85,14 +86,24 @@ export class AgentRuntime {
   private hookEventHandler: HookEventHandler;
   private lifecycleCallbacks: RuntimeLifecycleCallbacks = {};
 
+  /** Providers this runtime can dispatch to. Exposed so hosts can reach every
+   *  registered provider (hook installation, terminal launch) without holding
+   *  their own list. */
+  readonly providers: ProviderRegistry;
+
   constructor(
     private readonly store: AgentStateStore,
-    provider: HookProvider,
+    providers: HookProvider | readonly HookProvider[],
   ) {
+    // A single provider is just a registry of one; hosts that track one CLI
+    // (the VS Code adapter today) pass it directly.
+    this.providers = new ProviderRegistry(Array.isArray(providers) ? providers : [providers]);
+    const provider = this.providers.default;
+
     // Wire module-level dependencies
     setDismissalTracker(this.dismissalTracker);
     setHookProvider(provider);
-    setFileWatcherHookProvider(provider);
+    setFileWatcherHookProvider(this.providers);
     this.subagentWatch = new SubagentWatch(store);
     setSubagentWatch(this.subagentWatch);
     if (provider.team) {
@@ -146,7 +157,7 @@ export class AgentRuntime {
       store,
       this.waitingTimers,
       this.permissionTimers,
-      provider,
+      this.providers,
       new SessionRouter(),
       this.watchAllSessions,
     );

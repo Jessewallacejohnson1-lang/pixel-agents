@@ -17,3 +17,6 @@ export const CODEX_EXEC_DISPLAY_MAX_LENGTH = 60;
 
 /** Matches the file header inside an `apply_patch` blob. */
 export const CODEX_PATCH_FILE_HEADER = /^\*\*\* (?:Update|Add|Delete) File:\s*(.+)$/m;
+
+/** Bytes read from the head of a rollout file to find its `session_meta` header. */
+export const SESSION_META_READ_BYTES = 8192;

@@ -255,6 +255,78 @@ describe('codexProvider', () => {
     });
   });
 
+  describe('sessionCwdFromTranscript', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cwd-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    const writeRollout = (lines: unknown[]): string => {
+      const file = path.join(tmpDir, 'rollout-test.jsonl');
+      fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      return file;
+    };
+
+    const metaRecord = (cwd?: string) => ({
+      timestamp: '2026-08-08T14:00:00Z',
+      type: 'session_meta',
+      payload: { session_id: 's1', cwd, source: 'cli' },
+    });
+
+    it('reads the working directory out of the session_meta header', () => {
+      const file = writeRollout([
+        metaRecord('/Users/owner/project'),
+        { type: 'event_msg', payload: { type: 'task_complete' } },
+      ]);
+
+      expect(codexProvider.sessionCwdFromTranscript?.(file)).toBe('/Users/owner/project');
+    });
+
+    it('returns undefined when session_meta records no cwd', () => {
+      const file = writeRollout([metaRecord(undefined)]);
+
+      expect(codexProvider.sessionCwdFromTranscript?.(file)).toBeUndefined();
+    });
+
+    it('returns undefined when the file has no session_meta at all', () => {
+      const file = writeRollout([{ type: 'event_msg', payload: { type: 'task_complete' } }]);
+
+      expect(codexProvider.sessionCwdFromTranscript?.(file)).toBeUndefined();
+    });
+
+    it('returns undefined for a missing file instead of throwing', () => {
+      expect(() =>
+        codexProvider.sessionCwdFromTranscript?.(path.join(tmpDir, 'nope.jsonl')),
+      ).not.toThrow();
+      expect(
+        codexProvider.sessionCwdFromTranscript?.(path.join(tmpDir, 'nope.jsonl')),
+      ).toBeUndefined();
+    });
+
+    it('survives a truncated trailing line from the fixed-size head read', () => {
+      const file = path.join(tmpDir, 'rollout-truncated.jsonl');
+      fs.writeFileSync(file, JSON.stringify(metaRecord('/w')) + '\n{"type":"event_ms');
+
+      expect(codexProvider.sessionCwdFromTranscript?.(file)).toBe('/w');
+    });
+
+    it('does not read the whole file — only the head, where session_meta lives', () => {
+      const huge = {
+        type: 'event_msg',
+        payload: { type: 'agent_message', message: 'x'.repeat(500) },
+      };
+      const file = writeRollout([metaRecord('/Users/owner/big'), ...Array(500).fill(huge)]);
+
+      expect(fs.statSync(file).size).toBeGreaterThan(8192);
+      expect(codexProvider.sessionCwdFromTranscript?.(file)).toBe('/Users/owner/big');
+    });
+  });
+
   describe('buildLaunchCommand', () => {
     it('launches the codex CLI in the requested directory', () => {
       const launch = codexProvider.buildLaunchCommand?.('ignored-session-id', '/work');

@@ -12,6 +12,7 @@ import {
   setSubagentWatch,
   setTeamProvider,
 } from '../src/fileWatcher.js';
+import { ProviderRegistry } from '../src/providerRegistry.js';
 import { claudeProvider } from '../src/providers/hook/claude/claude.js';
 import { claudeTeamProvider } from '../src/providers/hook/claude/claudeTeamProvider.js';
 import { SubagentWatch } from '../src/subagentWatch.js';
@@ -211,7 +212,7 @@ describe('background spawns (teams OFF) classified by sidecar name', () => {
   beforeEach(() => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pixel-agents-bg-'));
     setHookProvider(claudeProvider);
-    setFileWatcherHookProvider(claudeProvider);
+    setFileWatcherHookProvider(new ProviderRegistry([claudeProvider]));
     setTeamProvider(claudeTeamProvider);
     agents = new AgentStateStore();
     watch = new SubagentWatch(agents);

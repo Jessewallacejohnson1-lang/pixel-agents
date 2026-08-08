@@ -22,6 +22,7 @@ import {
   CODEX_PATCH_FILE_HEADER,
   CODEX_SESSIONS_DIR,
   CODEX_TERMINAL_NAME_PREFIX,
+  SESSION_META_READ_BYTES,
 } from './constants.js';
 import { normalizeRolloutRecord, sessionIdFromRecord } from './rollout.js';
 
@@ -93,6 +94,48 @@ function getAllSessionRoots(): string[] {
  */
 function getSessionDirs(_workspacePath: string): string[] {
   return [];
+}
+
+/**
+ * Working directory of a Codex session, read from the `session_meta` header.
+ *
+ * Codex stores sessions by date, so the containing directory is a day number and
+ * says nothing about the project. The cwd is recorded in the first record
+ * instead. Only the head of the file is read — `session_meta` is the first line,
+ * and rollout files grow to megabytes.
+ */
+function sessionCwdFromTranscript(transcriptPath: string): string | undefined {
+  let handle: number | undefined;
+  try {
+    handle = fs.openSync(transcriptPath, 'r');
+    const buffer = Buffer.alloc(SESSION_META_READ_BYTES);
+    const bytesRead = fs.readSync(handle, buffer, 0, SESSION_META_READ_BYTES, 0);
+    const lines = buffer.subarray(0, bytesRead).toString('utf-8').split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let record: unknown;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        // A truncated final line from the fixed-size read, or a partial write.
+        continue;
+      }
+      if (!sessionIdFromRecord(record)) continue;
+      const cwd = (record as { payload?: { cwd?: unknown } }).payload?.cwd;
+      return typeof cwd === 'string' && cwd ? cwd : undefined;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (handle !== undefined) {
+      try {
+        fs.closeSync(handle);
+      } catch {
+        /* already closed */
+      }
+    }
+  }
 }
 
 function buildLaunchCommand(
@@ -179,6 +222,7 @@ export const codexProvider: HookProvider = {
   getSessionDirs,
   getAllSessionRoots,
   sessionFilePattern: '*.jsonl',
+  sessionCwdFromTranscript,
   parseTranscriptLine,
   buildLaunchCommand,
 };

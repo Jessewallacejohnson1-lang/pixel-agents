@@ -122,6 +122,15 @@ export interface HookProvider {
   getAllSessionRoots?(): string[];
   /** Glob pattern for session files (e.g., '*.jsonl'). */
   readonly sessionFilePattern?: string;
+  /** Working directory a session ran in, read from its transcript.
+   *
+   *  Only needed by providers whose session files are NOT stored under a
+   *  path-derived directory. Claude encodes the workspace path in its project
+   *  dir, so the label can be decoded from the path alone; Codex files live under
+   *  `sessions/<YYYY>/<MM>/<DD>/`, whose basename is a day number and would
+   *  otherwise label every agent "05", "06", "08". Return undefined when the
+   *  directory is unknown; the caller falls back to the path-derived label. */
+  sessionCwdFromTranscript?(transcriptPath: string): string | undefined;
   /** Parse one line of a transcript file into an AgentEvent. */
   parseTranscriptLine?(line: string): AgentEvent | null;
   /** Build CLI launch command for +Agent button. */
