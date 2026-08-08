@@ -348,4 +348,10 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
       });
     }
   }
+
+  // 9. Roster seat state, also AFTER layoutLoaded and for the same reason.
+  // Seat state is broadcast on change, so a client that connects later never
+  // saw it and would draw every employee as idle regardless of what they are
+  // doing.
+  runtime?.replayRosterTo(send);
 }

@@ -22,6 +22,7 @@ import type { AssetCache, ReloadAssetsSideEffect } from './clientMessageHandler.
 import { readConfig } from './configPersistence.js';
 import { MAX_PORT, MIN_PORT } from './constants.js';
 import { FileStateAdapter } from './fileStateAdapter.js';
+import { HttpRosterSource } from './httpRosterSource.js';
 import { claudeProvider, codexProvider, copyHookScript } from './providers/index.js';
 import { PixelAgentsServer } from './server.js';
 
@@ -32,6 +33,11 @@ export interface CliArgs {
    *  can run at once without a collision. --port picks a fixed one. */
   port?: number;
   host: string;
+  /** Orchestrator endpoint returning `{ seats: [...] }`. When set, the office
+   *  seats that roster permanently instead of showing only live sessions. */
+  rosterUrl?: string;
+  /** Bearer token for the roster endpoint, when it is authenticated. */
+  rosterToken?: string;
 }
 
 /** Thrown by parseArgs on an invalid --port. Kept separate from process.exit so
@@ -60,12 +66,20 @@ export function parseArgs(argv: string[]): CliArgs {
     } else if (argv[i] === '--host' && argv[i + 1]) {
       args.host = argv[i + 1];
       i++;
+    } else if (argv[i] === '--roster-url' && argv[i + 1]) {
+      args.rosterUrl = argv[i + 1];
+      i++;
+    } else if (argv[i] === '--roster-token' && argv[i + 1]) {
+      args.rosterToken = argv[i + 1];
+      i++;
     } else if (argv[i] === '--help') {
       console.log(`Usage: pixel-agents [options]
 
 Options:
   --port, -p <number>   Port to listen on (default: OS-assigned ephemeral port)
   --host <string>       Host to bind to (default: 127.0.0.1)
+  --roster-url <url>    Orchestrator roster endpoint; seats employees permanently
+  --roster-token <tok>  Bearer token for the roster endpoint
   --help                Show this help message`);
       process.exit(0);
     }
@@ -225,6 +239,13 @@ async function main(): Promise<void> {
       runtime.startProjectScan(projectDir);
       runtime.startExternalScanning(projectDir);
       runtime.startStaleCheck();
+    }
+
+    // An orchestrator's roster turns the office from a view of live sessions
+    // into a staff room: employees keep their desks between runs.
+    if (args.rosterUrl) {
+      runtime.startRoster(new HttpRosterSource(args.rosterUrl, args.rosterToken));
+      console.log(`[Pixel Agents] Roster: seating employees from ${args.rosterUrl}`);
     }
 
     console.log(`\n  Pixel Agents server running at http://${args.host}:${config.port}\n`);

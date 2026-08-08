@@ -193,6 +193,55 @@ describe('RosterSeating', () => {
     });
   });
 
+  describe('replay to a late-joining client', () => {
+    // State is broadcast on change. A browser that connects afterwards never saw
+    // it, and without replay every employee renders as idle whatever they are
+    // actually doing.
+    const replay = () => {
+      const sent: { type: string; [key: string]: unknown }[] = [];
+      seating.replayTo((m) => sent.push(m as { type: string }));
+      return sent;
+    };
+
+    it('re-sends the activity and active status of a working seat', () => {
+      seating.reconcile([seat({ state: 'working', activity: 'Fixing the map' })]);
+
+      const sent = replay();
+
+      expect(sent).toContainEqual(
+        expect.objectContaining({ type: 'agentToolStart', status: 'Fixing the map' }),
+      );
+      expect(sent).toContainEqual(
+        expect.objectContaining({ type: 'agentStatus', status: 'active' }),
+      );
+    });
+
+    it('re-raises the bubble for a stuck seat', () => {
+      seating.reconcile([seat({ state: 'stuck', activity: 'Need the password' })]);
+
+      expect(replay()).toContainEqual(expect.objectContaining({ type: 'agentToolPermission' }));
+    });
+
+    it('does not replay idle seats — a character with no tool already reads as idle, and replaying would ring the chime', () => {
+      seating.reconcile([seat({ state: 'idle' })]);
+
+      expect(replay()).toHaveLength(0);
+    });
+
+    it('replays nothing when nobody is seated', () => {
+      expect(replay()).toHaveLength(0);
+    });
+
+    it('sends to the given client only, without broadcasting to everyone', () => {
+      seating.reconcile([seat({ state: 'working', activity: 'Fixing the map' })]);
+      broadcasts.length = 0;
+
+      replay();
+
+      expect(broadcasts).toHaveLength(0);
+    });
+  });
+
   describe('coexistence with session agents', () => {
     it('leaves agents it did not create alone', () => {
       agents.set(99, {

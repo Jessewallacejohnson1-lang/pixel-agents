@@ -54,6 +54,36 @@ export class RosterSeating {
     }
   }
 
+  /**
+   * Re-send the current state of every non-idle seat to one client.
+   *
+   * State is broadcast on change, and a client that connects afterwards never
+   * saw it — employees would render at their desks with no activity, which
+   * reads as idle whatever they are actually doing.
+   *
+   * Idle is deliberately not replayed: a character with no active tool already
+   * renders as idle, and `agentStatus: 'waiting'` rings the notification chime,
+   * so replaying it would beep once per idle employee on every page load.
+   */
+  replayTo(send: (message: Record<string, unknown>) => void): void {
+    for (const entry of this.seated.values()) {
+      if (entry.state !== 'working' && entry.state !== 'stuck') continue;
+
+      if (entry.activity !== undefined) {
+        send({
+          type: 'agentToolStart',
+          id: entry.agentId,
+          toolId: ACTIVITY_TOOL_ID,
+          status: entry.activity,
+        });
+      }
+      send({ type: 'agentStatus', id: entry.agentId, status: 'active' });
+      if (entry.state === 'stuck') {
+        send({ type: 'agentToolPermission', id: entry.agentId });
+      }
+    }
+  }
+
   /** Agent id backing a seat, for callers that need to route an action to it. */
   agentIdFor(seatId: string): number | undefined {
     return this.seated.get(seatId)?.agentId;

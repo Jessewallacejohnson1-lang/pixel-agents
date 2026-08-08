@@ -599,6 +599,11 @@ export class AgentRuntime {
     this.rosterTimer = setInterval(() => void tick(), intervalMs);
   }
 
+  /** Re-send roster state to a freshly connected client. No-op without a roster. */
+  replayRosterTo(send: (message: Record<string, unknown>) => void): void {
+    this.rosterSeating?.replayTo(send);
+  }
+
   /** Seat id behind an agent, or undefined for session-owned agents. Lets a host
    *  route an office action back to the roster entry it belongs to. */
   seatIdForAgent(agentId: number): string | undefined {
