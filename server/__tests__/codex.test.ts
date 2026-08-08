@@ -1,0 +1,273 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Mock os.homedir() for cross-platform temp-home isolation, matching the pattern
+// in migrateVsCodeState.test.ts. Overriding process.env.HOME is not portable:
+// os.homedir() reads USERPROFILE on Windows. vi.spyOn cannot be used here — the
+// ESM namespace object's properties are non-configurable.
+let homeOverride: string;
+vi.mock('os', async () => {
+  const actual = await vi.importActual<typeof import('os')>('os');
+  return { ...actual, homedir: () => homeOverride };
+});
+
+import { codexProvider } from '../src/providers/hook/codex/codex.js';
+
+describe('codexProvider', () => {
+  describe('identity', () => {
+    it('has kind "hook"', () => {
+      expect(codexProvider.kind).toBe('hook');
+    });
+    it('has id "codex"', () => {
+      expect(codexProvider.id).toBe('codex');
+    });
+    it('has a displayName', () => {
+      expect(codexProvider.displayName).toBe('Codex');
+    });
+    it('declares protocolVersion 1 to match the runtime', () => {
+      expect(codexProvider.protocolVersion).toBe(1);
+    });
+    it('matches Codex rollout files', () => {
+      expect(codexProvider.sessionFilePattern).toBe('*.jsonl');
+    });
+  });
+
+  describe('hooks are not available on Codex', () => {
+    it('reports hooks as never installed', async () => {
+      await expect(codexProvider.areHooksInstalled()).resolves.toBe(false);
+    });
+    it('installHooks is a no-op that resolves rather than throwing', async () => {
+      await expect(
+        codexProvider.installHooks('http://127.0.0.1:1', 'tok'),
+      ).resolves.toBeUndefined();
+    });
+    it('uninstallHooks is a no-op that resolves', async () => {
+      await expect(codexProvider.uninstallHooks()).resolves.toBeUndefined();
+    });
+    it('never claims a permission request — Codex logs carry no approval events', () => {
+      const normalized = codexProvider.normalizeHookEvent({
+        session_id: 's1',
+        type: 'event_msg',
+        payload: { type: 'task_complete' },
+      });
+      expect(normalized?.event.kind).not.toBe('permissionRequest');
+    });
+  });
+
+  describe('normalizeHookEvent', () => {
+    it('normalizes a pushed rollout record when a session_id accompanies it', () => {
+      expect(
+        codexProvider.normalizeHookEvent({
+          session_id: 'sess-1',
+          type: 'response_item',
+          payload: { type: 'custom_tool_call', call_id: 'c1', name: 'exec', input: 'ls' },
+        }),
+      ).toEqual({
+        sessionId: 'sess-1',
+        event: { kind: 'toolStart', toolId: 'c1', toolName: 'exec', input: 'ls' },
+      });
+    });
+
+    it('falls back to the session id inside a session_meta payload', () => {
+      const normalized = codexProvider.normalizeHookEvent({
+        type: 'session_meta',
+        payload: { session_id: 'sess-2', cwd: '/w', source: 'cli' },
+      });
+      expect(normalized?.sessionId).toBe('sess-2');
+      expect(normalized?.event.kind).toBe('sessionStart');
+    });
+
+    it('returns null when no session id can be determined', () => {
+      expect(
+        codexProvider.normalizeHookEvent({
+          type: 'event_msg',
+          payload: { type: 'task_complete' },
+        }),
+      ).toBeNull();
+    });
+
+    it('returns null for a record with no office-visible meaning', () => {
+      expect(
+        codexProvider.normalizeHookEvent({
+          session_id: 'sess-1',
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: 'hi' },
+        }),
+      ).toBeNull();
+    });
+  });
+
+  describe('parseTranscriptLine', () => {
+    it('parses a rollout line into an AgentEvent', () => {
+      expect(
+        codexProvider.parseTranscriptLine?.(
+          JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }),
+        ),
+      ).toEqual({ kind: 'turnEnd' });
+    });
+
+    it('returns null for a malformed line instead of throwing — tailing hits partial writes', () => {
+      expect(() => codexProvider.parseTranscriptLine?.('{"type":"event_')).not.toThrow();
+      expect(codexProvider.parseTranscriptLine?.('{"type":"event_')).toBeNull();
+    });
+
+    it('returns null for a blank line', () => {
+      expect(codexProvider.parseTranscriptLine?.('   ')).toBeNull();
+    });
+  });
+
+  describe('formatToolStatus', () => {
+    it('describes exec by its command', () => {
+      expect(codexProvider.formatToolStatus('exec', 'ls -la')).toBe('Running: ls -la');
+    });
+
+    it('uses only the first line of a multi-line exec script', () => {
+      expect(codexProvider.formatToolStatus('exec', 'npm test\nnpm run lint')).toBe(
+        'Running: npm test',
+      );
+    });
+
+    it('truncates a long exec command', () => {
+      const status = codexProvider.formatToolStatus('exec', 'x'.repeat(400));
+      expect(status.length).toBeLessThan(120);
+      expect(status.endsWith('…')).toBe(true);
+    });
+
+    it('names the edited file for apply_patch', () => {
+      expect(
+        codexProvider.formatToolStatus(
+          'apply_patch',
+          '*** Begin Patch\n*** Update File: /a/b/POICluster.swift\n@@\n-x\n+y\n',
+        ),
+      ).toBe('Editing POICluster.swift');
+    });
+
+    it('handles Add File and Delete File patch headers', () => {
+      expect(
+        codexProvider.formatToolStatus('apply_patch', '*** Begin Patch\n*** Add File: /a/New.ts\n'),
+      ).toBe('Editing New.ts');
+      expect(
+        codexProvider.formatToolStatus(
+          'apply_patch',
+          '*** Begin Patch\n*** Delete File: /a/Old.ts',
+        ),
+      ).toBe('Editing Old.ts');
+    });
+
+    it('falls back gracefully when a patch has no recognizable file header', () => {
+      expect(codexProvider.formatToolStatus('apply_patch', 'garbage')).toBe('Applying patch');
+    });
+
+    it('describes an unknown tool by name', () => {
+      expect(codexProvider.formatToolStatus('wait', { cell_id: '1' })).toBe('Using wait');
+    });
+
+    it('does not throw on a non-string input for a string-input tool', () => {
+      expect(() => codexProvider.formatToolStatus('exec', { not: 'a string' })).not.toThrow();
+    });
+
+    it('labels exec generically when the command is blank', () => {
+      expect(codexProvider.formatToolStatus('exec', '   \n  ')).toBe('Running command');
+    });
+
+    it('labels apply_patch generically when the input is not a string', () => {
+      expect(codexProvider.formatToolStatus('apply_patch', { changes: {} })).toBe('Applying patch');
+    });
+  });
+
+  describe('tool classification', () => {
+    it('treats no Codex tool as read-like — exec animates as typing, matching Claude Bash', () => {
+      expect(codexProvider.readingTools.size).toBe(0);
+    });
+    it('exempts no tools from permission timers', () => {
+      expect(codexProvider.permissionExemptTools.size).toBe(0);
+    });
+    it('declares no subagent-spawning tool names — sub-agents arrive as events', () => {
+      expect(codexProvider.subagentToolNames.size).toBe(0);
+    });
+  });
+
+  describe('contextWindowForModel', () => {
+    it('returns undefined — Codex states its window per turn rather than per model', () => {
+      expect(codexProvider.contextWindowForModel?.('gpt-5-codex')).toBeUndefined();
+    });
+  });
+
+  describe('session roots', () => {
+    let tmpHome: string;
+
+    beforeEach(() => {
+      tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-provider-'));
+      homeOverride = tmpHome;
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    });
+
+    const mkSession = (rel: string) => {
+      const dir = path.join(tmpHome, '.codex', 'sessions', rel);
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    };
+
+    it('returns month directories, so the scanner sees day dirs as its session dirs', () => {
+      mkSession('2026/08/05');
+      mkSession('2026/07/30');
+
+      const roots = codexProvider.getAllSessionRoots?.() ?? [];
+
+      expect(roots).toHaveLength(2);
+      expect(roots).toContain(path.join(tmpHome, '.codex', 'sessions', '2026', '08'));
+      expect(roots).toContain(path.join(tmpHome, '.codex', 'sessions', '2026', '07'));
+    });
+
+    it('spans multiple years', () => {
+      mkSession('2025/12/31');
+      mkSession('2026/01/01');
+
+      const roots = codexProvider.getAllSessionRoots?.() ?? [];
+
+      expect(roots).toContain(path.join(tmpHome, '.codex', 'sessions', '2025', '12'));
+      expect(roots).toContain(path.join(tmpHome, '.codex', 'sessions', '2026', '01'));
+    });
+
+    it('returns an empty list when Codex has never run, without throwing', () => {
+      expect(() => codexProvider.getAllSessionRoots?.()).not.toThrow();
+      expect(codexProvider.getAllSessionRoots?.()).toEqual([]);
+    });
+
+    it('ignores stray files among the year and month directories', () => {
+      mkSession('2026/08/05');
+      fs.writeFileSync(path.join(tmpHome, '.codex', 'sessions', 'notes.txt'), 'x');
+      fs.writeFileSync(path.join(tmpHome, '.codex', 'sessions', '2026', 'stray.log'), 'x');
+
+      expect(codexProvider.getAllSessionRoots?.()).toEqual([
+        path.join(tmpHome, '.codex', 'sessions', '2026', '08'),
+      ]);
+    });
+
+    it('does not scope sessions by workspace — Codex records cwd inside the file', () => {
+      mkSession('2026/08/05');
+      expect(codexProvider.getSessionDirs?.('/some/workspace')).toEqual([]);
+    });
+  });
+
+  describe('buildLaunchCommand', () => {
+    it('launches the codex CLI in the requested directory', () => {
+      const launch = codexProvider.buildLaunchCommand?.('ignored-session-id', '/work');
+      expect(launch?.command).toBe('codex');
+      expect(launch?.env).toMatchObject({ PWD: '/work' });
+      expect(launch?.args).toEqual([]);
+    });
+
+    it('passes the bypass flag only when explicitly requested', () => {
+      const launch = codexProvider.buildLaunchCommand?.('s', '/work', {
+        bypassPermissions: true,
+      });
+      expect(launch?.args).toContain('--dangerously-bypass-approvals-and-sandbox');
+    });
+  });
+});
