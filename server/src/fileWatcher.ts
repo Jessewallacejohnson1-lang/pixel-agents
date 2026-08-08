@@ -49,6 +49,7 @@ import { pathsMatch } from './pathKey.js';
 import type { ProviderRegistry } from './providerRegistry.js';
 import type { SubagentWatch } from './subagentWatch.js';
 import { cancelPermissionTimer, cancelWaitingTimer, clearAgentActivity } from './timerManager.js';
+import { applyTranscriptEvent } from './transcriptEventDispatch.js';
 import { getHookProvider, processTranscriptLine } from './transcriptParser.js';
 import type { AgentState } from './types.js';
 
@@ -241,8 +242,27 @@ export function readNewLines(
       }
     }
 
+    // Providers that parse their own transcript take the generic AgentEvent path.
+    // Claude has no parseTranscriptLine and stays on processTranscriptLine, which
+    // reads context usage, teams, and /clear -- none of which AgentEvent carries.
+    const provider = providerFor(agent);
+    const parseLine = provider?.parseTranscriptLine;
     for (const line of lines) {
       if (!line.trim()) continue;
+      if (parseLine && provider) {
+        const event = parseLine.call(provider, line);
+        if (event)
+          applyTranscriptEvent(
+            agentId,
+            agent,
+            event,
+            provider,
+            agents,
+            waitingTimers,
+            permissionTimers,
+          );
+        continue;
+      }
       processTranscriptLine(agentId, line, agents, waitingTimers, permissionTimers);
     }
   } catch (e) {
@@ -1176,6 +1196,7 @@ function adoptExternalSession(
 
   persistAgents: () => void,
   folderName?: string,
+  providerId?: string,
 ): void {
   const id = nextAgentIdRef.current++;
   // Decide whether to replay the existing file content or skip to its end.
@@ -1230,6 +1251,9 @@ function adoptExternalSession(
     linesProcessed: 0,
     seenUnknownRecordTypes: new Set(),
     folderName,
+    // Binds the agent to the provider that discovered it, so its transcript is
+    // parsed by the same provider that owns the directory it came from.
+    providerId,
     contextTokens: 0,
     maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS,
   };
@@ -1570,6 +1594,7 @@ function scanGlobalProjectDirs(
         permissionTimers,
         persistAgents,
         folderName,
+        provider.id,
       );
     }
   }
