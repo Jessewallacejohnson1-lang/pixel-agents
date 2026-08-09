@@ -1,7 +1,9 @@
 # Hybrid Agent Orchestration Surface — Design
 
 Date: 2026-08-08
-Status: Approved (design), implementation in progress
+Status: Implemented, with recorded deviations and gaps — see Architecture and
+Build order. Sections below describe intent; where the code diverged, the
+divergence is called out inline rather than by rewriting the original decision.
 Fork of: `pixel-agents-hq/pixel-agents` @ v1.4.0
 
 ## Goal
@@ -29,26 +31,35 @@ over it.
 
 ## Architecture
 
-One process. `bizops` embeds the forked office server as a library rather than
-running it as a separate service.
+Two processes, connected by a roster the office only ever mirrors.
 
 ```
-┌──────────────────── bizops (single process) ─────────────────────┐
-│                                                                  │
-│  registry · scheduler · runner            (existing)             │
-│  ledger: agents, runs, events, cost, escalations   (existing)    │
-│                          │                                       │
-│                          ▼                                       │
-│                  office runtime          (from fork)             │
-│                  AgentStateStore, seats, characters              │
-└──────────────────────────┬───────────────────────────────────────┘
-                           │  WebSocket
-                      browser: the office
+  bizops                                office server
+  ├─ registry · scheduler · runner      ├─ providers: Claude, Codex
+  ├─ ledger: runs, cost, escalations    ├─ RosterSeating (no roster state)
+  │                                     │
+  └─ GET  /api/office/seats  ──────────▶│  poll, reconcile whole list
+     POST /api/agents/:id/chat  ◀───────┤  seat actions
+     POST /api/escalations/:id/resolve ◀┘
+                                         │ WebSocket
+                                    browser: the office
 ```
 
-Rejecting two processes is deliberate. With `bizops` as the authority, a
-separate office server would hold a second copy of "what is running" that can
-drift from the ledger. A single process makes the ledger the only copy.
+**This differs from the decision recorded above, and the change was deliberate.**
+The original design embedded the office in `bizops` as a library, to avoid two
+systems independently tracking runs and drifting apart. Implementation showed
+that the property mattered, not the process count: the office keeps _no_ roster
+state, re-reads the whole list each poll, and reconciles. `bizops` remains the
+only place that knows who is on staff, so the two cannot disagree.
+
+What two processes cost is one-command startup. Embedding remains the better end
+state and needs ~250 lines of CLI composition extracted into a library entry
+point; it was not worth blocking the working system on. See Build order.
+
+A failed poll keeps the last known roster rather than emptying every desk, and
+says so — at the start of an outage and periodically while it lasts. Warning
+only once left a permanent outage silent, with the office drawing a fleet that
+had stopped updating.
 
 ### Three event sources, one runtime
 
@@ -87,6 +98,10 @@ Claude or Codex sessions started outside `bizops` have no roster entry. They are
 seated in a separate area, visually distinct, and removed when their session
 ends. They are observable but not controllable (see Controls).
 
+> **Not built.** Walk-ins are seated and removed correctly, and the office
+> refuses to offer them actions, but they are not visually distinct from staff
+> and get no separate area.
+
 ### Deduplication
 
 If `bizops` ever launches Codex via the Codex CLI, two independent sources
@@ -97,6 +112,9 @@ as two characters, one of them a phantom.
 Codex's `conversationId` appears in both `~/.codex/process_manager/chat_processes.json`
 and in the rollout files, and is the dedup key. Deduplication happens before an
 event reaches a seat.
+
+> **Not built.** Nothing dedupes today. It cannot bite until `bizops` launches
+> Codex through its CLI, which it does not yet do.
 
 ## Controls
 
@@ -124,15 +142,24 @@ adds a face and a return path.
 ```
 agent requests a privileged action
   → bizops parks the run, writes an escalation, marks the desk Stuck
-  → office shows a bubble; click reveals the request
-  → Approve / Deny
-  → bizops resolves the parked call; the run continues
-  → ledger records the decision, the decider, and the time
+  → office shows a bubble; click the employee for its actions
+  → Mark resolved
+  → bizops closes the escalation; the seat returns to idle on the next poll
+  → ledger records how it ended and when
 ```
 
+Built as **Mark resolved**, not Approve/Deny. `bizops` escalations are a request
+for a human to act, not a permission gate on a specific tool call, so a single
+acknowledgement matches what the ledger actually models.
+
 **Timeout is mandatory.** A parked run waits indefinitely by default, and a
-stuck character looks calm — the failure is silent. Escalations auto-deny after
-a configurable interval, recorded as a timeout rather than a human decision.
+stuck character looks calm — the failure is silent. Escalations expire after a
+configurable interval, recorded as a timeout rather than a human decision.
+
+> **Built** in `bizops`: `expireStaleEscalations` plus a sweeper on a one-minute
+> timer, configured by `BIZOPS_ESCALATION_TIMEOUT_MINUTES` (default 60, 0
+> disables). Resolutions are stored as `human` or `timeout` so a report cannot
+> claim the queue was handled when it was only abandoned.
 
 ### Limits accepted for v1
 
@@ -238,24 +265,47 @@ speed. Test harness and demo from one code path.
 
 ## Build order
 
-1. **Codex provider** — pure mapping plus file fallback. No runtime changes.
-   Unblocked today. Upstreamable.
-2. **Multi-provider runtime** — provider-aware `hookEventHandler`, `fileWatcher`,
-   and `AgentRuntime`. Required for Claude and Codex simultaneously.
-   Upstreamable, and the larger job.
-3. **Roster-driven seats** — employees, idle desks, walk-in area.
-4. **bizops integration** — embed the office runtime; wire the two controls.
+1. **Codex provider** — DONE. Pure mapping plus file fallback. Session discovery
+   needed no runtime change: returning month directories makes the existing
+   two-level scanner work against Codex's four-level layout. Upstreamable.
+2. **Multi-provider runtime** — DONE. `ProviderRegistry`; `hookEventHandler`
+   resolves per event instead of ignoring the provider id; `fileWatcher` unions
+   session roots and resolves per agent; transcript lines route through the
+   owning provider. Upstreamable, and the larger job.
+3. **Roster-driven seats** — DONE for employees, idle desks, and state. Walk-in
+   area not built: walk-ins are seated but not visually distinct.
+4. **bizops integration** — DONE over HTTP; both controls work. Escalation
+   timeout implemented in `bizops`
+   (`BIZOPS_ESCALATION_TIMEOUT_MINUTES`, default 60).
 
-Steps 1 and 2 are independent of `bizops` and can proceed while it is
-inaccessible.
+### Not built
+
+Known gaps, recorded so they are not mistaken for oversights:
+
+- **Single-process embedding.** Needs the CLI's composition extracted into a
+  library entry point. See Architecture.
+- **Codex deduplication.** Designed above, not implemented. Harmless until
+  `bizops` launches Codex through its CLI, at which point one employee renders
+  as two characters.
+- **Open seats are not drawn.** The design calls for an empty desk with a job
+  title that can be hired; unfilled roles are currently invisible.
+- **Walk-ins are not visually distinct** from staff.
+- **No Codex context gauge**, despite Codex reporting `token_count` natively.
+- **The org chart is unused.** `reportsTo` reaches the UI and nothing draws it.
+- **No end-to-end tests** for the roster or Codex paths. Coverage is unit and
+  integration; the live flows were verified by hand, which is not repeatable.
 
 ## Open items
 
-- **`~/Documents` is unreadable** to the development environment (macOS TCC
-  denies directory access). `bizops` lives there, so steps 3 and 4 are blocked
-  until Full Disk Access is granted or the repository is relocated.
-- **No fork remote yet.** The working copy has `upstream` pointing at the
-  original repository; no fork has been created under the user's account.
+- **Never run against the real ledger.** Every live verification used a throwaway
+  `bizops` database. The wiring is unproven against real staff and real runs.
+- **Not upstreamed.** The Codex provider and the multi-provider runtime are the
+  two pieces worth contributing back; the second makes upstream's own
+  documented claim true.
 - **Unrelated security issue:** `~/.claude/settings.json` contains a GitHub
-  personal access token in plaintext, with `autoUploadSessions` enabled. Rotate
-  the token and move it out of the settings file.
+  personal access token in plaintext, with `autoUploadSessions` enabled. Raised
+  with the operator, who chose to leave it.
+
+Resolved during implementation: `~/Documents` access (granted), and the fork
+remote (created at `Jessewallacejohnson1-lang/pixel-agents`, with `upstream`
+still pointing at the original).
