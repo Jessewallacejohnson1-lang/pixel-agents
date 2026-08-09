@@ -7,7 +7,7 @@ interface SeatActionBarProps {
   seat: RosterSeatInfo;
   /** Give the employee a job. */
   onStartWork: (task: string) => void;
-  /** Mark what the employee is waiting on as answered. */
+  /** Answer what the employee is waiting on and let it carry on working. */
   onResolveStuck: () => void;
   onDismiss: () => void;
 }
