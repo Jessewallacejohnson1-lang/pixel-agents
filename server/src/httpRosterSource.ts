@@ -21,6 +21,12 @@ const VALID_STATES: ReadonlySet<string> = new Set<SeatState>([
 /** Abandon a poll after this long; a hung orchestrator must not stall the loop. */
 const REQUEST_TIMEOUT_MS = 4000;
 
+/** Re-warn after this many consecutive failures. Warning only once per outage
+ *  keeps the log quiet, but an outage that never ends then serves a stale roster
+ *  in silence — the office shows a fleet that stopped updating and says nothing.
+ *  At the default 2s poll this speaks up about every minute. */
+const REWARN_AFTER_FAILURES = 30;
+
 function toSeat(raw: unknown): RosterSeat | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const record = raw as Record<string, unknown>;
@@ -45,7 +51,7 @@ export class HttpRosterSource implements RosterSource {
   /** Last roster read successfully. Returned when a poll fails, so a blip in
    *  the orchestrator empties nobody's desk. */
   private lastGood: readonly RosterSeat[] = [];
-  private warnedAboutFailure = false;
+  private consecutiveFailures = 0;
 
   constructor(
     private readonly url: string,
@@ -66,20 +72,32 @@ export class HttpRosterSource implements RosterSource {
 
       const seats = rawSeats.map(toSeat).filter((s): s is RosterSeat => s !== null);
       this.lastGood = seats;
-      this.warnedAboutFailure = false;
+      if (this.consecutiveFailures > 0) {
+        console.warn(`[Pixel Agents] Roster: ${this.url} is back; seats are live again`);
+        this.consecutiveFailures = 0;
+      }
       return seats;
     } catch (e) {
       return this.fail(e instanceof Error ? e.message : String(e));
     }
   }
 
-  /** Warn once per outage rather than on every poll, then keep the last roster. */
+  /**
+   * Keep the last roster and say so — at the start of an outage and periodically
+   * while it lasts.
+   *
+   * Warning only at the start would leave a permanent outage silent: the office
+   * would keep drawing a roster that stopped updating, and nothing on screen or
+   * in the log would say the picture is old.
+   */
   private fail(reason: string): readonly RosterSeat[] {
-    if (!this.warnedAboutFailure) {
+    const isFirst = this.consecutiveFailures === 0;
+    this.consecutiveFailures++;
+    if (isFirst || this.consecutiveFailures % REWARN_AFTER_FAILURES === 0) {
+      const age = isFirst ? '' : ` for ${this.consecutiveFailures} polls`;
       console.warn(
-        `[Pixel Agents] Roster: ${this.url} unavailable (${reason}); keeping last known`,
+        `[Pixel Agents] Roster: ${this.url} unavailable${age} (${reason}); showing a stale roster`,
       );
-      this.warnedAboutFailure = true;
     }
     return this.lastGood;
   }

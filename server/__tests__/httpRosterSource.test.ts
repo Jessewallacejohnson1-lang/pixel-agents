@@ -134,6 +134,28 @@ describe('HttpRosterSource', () => {
       expect(warn).toHaveBeenCalledTimes(1);
     });
 
+    it('speaks up again during a long outage, so stale seats are never silent', async () => {
+      fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
+      const source = new HttpRosterSource('http://host/seats');
+
+      // 30 polls at the default 2s interval is about a minute of staleness.
+      for (let i = 0; i < 30; i++) await source.listSeats();
+
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls[1]?.[0]).toMatch(/stale/i);
+    });
+
+    it('says when the roster comes back', async () => {
+      const source = new HttpRosterSource('http://host/seats');
+      fetchMock.mockRejectedValue(new Error('down'));
+      await source.listSeats();
+
+      fetchMock.mockResolvedValue(OK({ seats: [] }));
+      await source.listSeats();
+
+      expect(warn.mock.calls[1]?.[0]).toMatch(/back/i);
+    });
+
     it('warns again after recovering and failing anew', async () => {
       const source = new HttpRosterSource('http://host/seats');
       fetchMock.mockRejectedValue(new Error('down'));
@@ -145,7 +167,9 @@ describe('HttpRosterSource', () => {
       fetchMock.mockRejectedValue(new Error('down again'));
       await source.listSeats();
 
-      expect(warn).toHaveBeenCalledTimes(2);
+      // down, back, down again — each transition is worth saying out loud.
+      expect(warn).toHaveBeenCalledTimes(3);
+      expect(warn.mock.calls[2]?.[0]).toMatch(/unavailable/i);
     });
   });
 });
