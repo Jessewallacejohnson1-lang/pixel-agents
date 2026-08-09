@@ -311,6 +311,7 @@ export interface RosterSeatInfo {
   title: string;
   state: AnonymousSchema_189;
   reportsTo?: string;
+  detail?: string;
 }
 
 export type AnonymousSchema_189 = 'idle' | 'working' | 'stuck';
@@ -424,8 +425,8 @@ export interface RequestDiagnostics {
 export interface SeatAction {
   type: 'seatAction';
   id: number;
-  action: AnonymousSchema_235;
+  action: AnonymousSchema_236;
   task?: string;
 }
 
-export type AnonymousSchema_235 = 'startWork' | 'resolveStuck';
+export type AnonymousSchema_236 = 'startWork' | 'resolveStuck';

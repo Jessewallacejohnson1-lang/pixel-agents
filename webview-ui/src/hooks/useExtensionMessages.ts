@@ -73,6 +73,8 @@ export interface RosterSeatInfo {
   title: string;
   state: 'idle' | 'working' | 'stuck';
   reportsTo?: string;
+  /** What the agent is actually asking. Present when stuck. */
+  detail?: string;
 }
 
 interface ExtensionMessageState {

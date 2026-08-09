@@ -779,6 +779,11 @@ components:
         reportsTo:
           type: string
           description: Seat this one reports to. Absent means it reports to the operator.
+        detail:
+          type: string
+          description: >
+            The agent's own explanation of what it is asking. Present when the
+            seat is stuck, so the operator can decide without leaving the office.
 
     RosterSeats:
       description: >

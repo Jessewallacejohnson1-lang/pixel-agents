@@ -44,6 +44,7 @@ function toSeat(raw: unknown): RosterSeat | null {
     reportsTo: typeof record.reportsTo === 'string' ? record.reportsTo : null,
     state: state as SeatState,
     activity: typeof record.activity === 'string' ? record.activity : undefined,
+    detail: typeof record.detail === 'string' ? record.detail : undefined,
   };
 }
 

@@ -24,10 +24,19 @@ const ACTIVITY_TOOL_ID = 'roster-activity';
  *  switched-off staff, which reads better as an empty desk than a greyed one. */
 const STAFFED_STATES: ReadonlySet<SeatState> = new Set<SeatState>(['idle', 'working', 'stuck']);
 
+interface SeatInfo {
+  seatId: string;
+  title: string;
+  state: SeatState;
+  reportsTo?: string;
+  detail?: string;
+}
+
 interface SeatedAgent {
   agentId: number;
   state: SeatState;
   activity: string | undefined;
+  detail: string | undefined;
   title: string;
   reportsTo: string | null;
 }
@@ -68,20 +77,15 @@ export class RosterSeating {
   }
 
   /** Agent id (as a string key) to the seat behind it. */
-  private seatMap(): Record<
-    string,
-    { seatId: string; title: string; state: SeatState; reportsTo?: string }
-  > {
-    const map: Record<
-      string,
-      { seatId: string; title: string; state: SeatState; reportsTo?: string }
-    > = {};
+  private seatMap(): Record<string, SeatInfo> {
+    const map: Record<string, SeatInfo> = {};
     for (const [seatId, entry] of this.seated) {
       map[String(entry.agentId)] = {
         seatId,
         title: entry.title,
         state: entry.state,
         ...(entry.reportsTo !== null ? { reportsTo: entry.reportsTo } : {}),
+        ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
       };
     }
     return map;
@@ -175,6 +179,7 @@ export class RosterSeating {
       agentId,
       state: 'off',
       activity: undefined,
+      detail: undefined,
       title: seat.title,
       reportsTo: seat.reportsTo,
     };
@@ -192,13 +197,17 @@ export class RosterSeating {
   private applyState(seat: RosterSeat, entry: SeatedAgent): void {
     const stateChanged = entry.state !== seat.state;
     const activityChanged = entry.activity !== seat.activity;
-    if (!stateChanged && !activityChanged) return;
+    const detailChanged = entry.detail !== seat.detail;
+    if (!stateChanged && !activityChanged && !detailChanged) {
+      return;
+    }
 
     const agent = this.agents.get(entry.agentId);
     if (agent === undefined) return;
 
     entry.state = seat.state;
     entry.activity = seat.activity;
+    entry.detail = seat.detail;
     entry.title = seat.title;
     entry.reportsTo = seat.reportsTo;
 

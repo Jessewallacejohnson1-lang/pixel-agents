@@ -37,6 +37,10 @@ export interface RosterSeat {
   state: SeatState;
   /** One-line description of current work. Only meaningful while `working`. */
   activity?: string;
+  /** The agent's own explanation of what it is asking. Shown when the seat is
+   *  stuck, so a decision can be made without leaving the office for the
+   *  console — a one-line title is rarely enough to answer anything. */
+  detail?: string;
 }
 
 export interface RosterSource {

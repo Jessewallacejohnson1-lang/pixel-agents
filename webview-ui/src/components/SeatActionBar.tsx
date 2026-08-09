@@ -47,51 +47,60 @@ export function SeatActionBar({
   };
 
   return (
-    <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-10 flex gap-4 items-center pixel-panel p-4">
-      <span className="text-text">{seat.title}</span>
-
-      {seat.state === 'stuck' && (
-        <Button
-          size="md"
-          onClick={onResolveStuck}
-          title="Mark what this employee is waiting on as answered"
-        >
-          Mark resolved
-        </Button>
+    <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-10 flex flex-col gap-4 pixel-panel p-4 max-w-[560px]">
+      {/* A one-line title is rarely enough to answer anything. Showing the
+          agent's own explanation is what makes deciding here possible at all,
+          instead of sending the operator to the console and back. */}
+      {seat.state === 'stuck' && seat.detail && (
+        <p className="text-text-muted m-0 whitespace-pre-wrap">{seat.detail}</p>
       )}
 
-      {composing ? (
-        <>
-          <input
-            // autoFocus, not a focus effect: the effect runs a tick after the
-            // input mounts, and a keystroke landing in that gap is dropped.
-            autoFocus
-            className="min-w-0 bg-bg text-text border-2 border-border px-2 py-0.5"
-            value={task}
-            placeholder="What should they do?"
-            onChange={(e) => setTask(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submit();
-              if (e.key === 'Escape') setComposing(false);
-            }}
-          />
+      <div className="flex gap-4 items-center">
+        <span className="text-text">{seat.title}</span>
+
+        {seat.state === 'stuck' && (
           <Button
-            variant={task.trim() ? 'default' : 'disabled'}
             size="md"
-            onClick={task.trim() ? submit : undefined}
+            onClick={onResolveStuck}
+            title="Answer the question and let this employee pick the work back up. Starts a real run."
           >
-            Send
+            Answer &amp; resume
           </Button>
-        </>
-      ) : (
-        <Button size="md" onClick={() => setComposing(true)} title="Give this employee a job">
-          Give work
-        </Button>
-      )}
+        )}
 
-      <Button size="md" onClick={onDismiss} title="Close">
-        Close
-      </Button>
+        {composing ? (
+          <>
+            <input
+              // autoFocus, not a focus effect: the effect runs a tick after the
+              // input mounts, and a keystroke landing in that gap is dropped.
+              autoFocus
+              className="min-w-0 bg-bg text-text border-2 border-border px-2 py-0.5"
+              value={task}
+              placeholder="What should they do?"
+              onChange={(e) => setTask(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submit();
+                if (e.key === 'Escape') setComposing(false);
+              }}
+            />
+            <Button
+              variant={task.trim() ? 'default' : 'disabled'}
+              size="md"
+              onClick={task.trim() ? submit : undefined}
+            >
+              Send
+            </Button>
+          </>
+        ) : (
+          <Button size="md" onClick={() => setComposing(true)} title="Give this employee a job">
+            Give work
+          </Button>
+        )}
+
+        <Button size="md" onClick={onDismiss} title="Close">
+          Close
+        </Button>
+      </div>
     </div>
   );
 }
