@@ -22,7 +22,8 @@ import {
   CODEX_PATCH_FILE_HEADER,
   CODEX_SESSIONS_DIR,
   CODEX_TERMINAL_NAME_PREFIX,
-  SESSION_META_READ_BYTES,
+  SESSION_META_CHUNK_BYTES,
+  SESSION_META_MAX_BYTES,
 } from './constants.js';
 import { normalizeRolloutRecord, sessionIdFromRecord } from './rollout.js';
 
@@ -105,24 +106,43 @@ function getSessionDirs(_workspacePath: string): string[] {
  * and rollout files grow to megabytes.
  */
 function sessionCwdFromTranscript(transcriptPath: string): string | undefined {
+  const line = readFirstLine(transcriptPath);
+  if (line === undefined) return undefined;
+
+  let record: unknown;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!sessionIdFromRecord(record)) return undefined;
+
+  const cwd = (record as { payload?: { cwd?: unknown } }).payload?.cwd;
+  return typeof cwd === 'string' && cwd ? cwd : undefined;
+}
+
+/**
+ * First newline-terminated line of a file, read in chunks.
+ *
+ * Reading a fixed block instead would truncate the line whenever the header is
+ * bigger than the block -- which is the normal case, since `session_meta`
+ * carries the agent's base instructions and runs to tens of kilobytes. Returns
+ * undefined if no newline appears within the cap, rather than treating a
+ * partial line as complete.
+ */
+function readFirstLine(filePath: string): string | undefined {
   let handle: number | undefined;
   try {
-    handle = fs.openSync(transcriptPath, 'r');
-    const buffer = Buffer.alloc(SESSION_META_READ_BYTES);
-    const bytesRead = fs.readSync(handle, buffer, 0, SESSION_META_READ_BYTES, 0);
-    const lines = buffer.subarray(0, bytesRead).toString('utf-8').split('\n');
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let record: unknown;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        // A truncated final line from the fixed-size read, or a partial write.
-        continue;
-      }
-      if (!sessionIdFromRecord(record)) continue;
-      const cwd = (record as { payload?: { cwd?: unknown } }).payload?.cwd;
-      return typeof cwd === 'string' && cwd ? cwd : undefined;
+    handle = fs.openSync(filePath, 'r');
+    const chunk = Buffer.alloc(SESSION_META_CHUNK_BYTES);
+    let text = '';
+
+    while (text.length < SESSION_META_MAX_BYTES) {
+      const bytesRead = fs.readSync(handle, chunk, 0, SESSION_META_CHUNK_BYTES, text.length);
+      if (bytesRead === 0) break; // end of file with no newline
+      text += chunk.subarray(0, bytesRead).toString('utf-8');
+      const newline = text.indexOf('\n');
+      if (newline !== -1) return text.slice(0, newline);
     }
     return undefined;
   } catch {

@@ -315,6 +315,37 @@ describe('codexProvider', () => {
       expect(codexProvider.sessionCwdFromTranscript?.(file)).toBe('/w');
     });
 
+    it('reads a session_meta header larger than one read chunk', () => {
+      // Real headers embed the agent's base instructions and run to tens of KB.
+      // A fixed-block read truncated them mid-JSON, and every Codex agent fell
+      // back to being labelled with the day-number directory it sat in.
+      const file = writeRollout([
+        {
+          timestamp: '2026-08-09T09:51:32Z',
+          type: 'session_meta',
+          payload: {
+            session_id: 's1',
+            cwd: '/Users/owner/Documents/bp-daily-feed',
+            base_instructions: { text: 'x'.repeat(120_000) },
+          },
+        },
+        { type: 'event_msg', payload: { type: 'task_complete' } },
+      ]);
+
+      expect(fs.statSync(file).size).toBeGreaterThan(100_000);
+      expect(codexProvider.sessionCwdFromTranscript?.(file)).toBe(
+        '/Users/owner/Documents/bp-daily-feed',
+      );
+    });
+
+    it('returns undefined for a file whose first line never terminates', () => {
+      const file = path.join(tmpDir, 'rollout-endless.jsonl');
+      // No newline anywhere: a partial line must not be treated as complete.
+      fs.writeFileSync(file, '{"type":"session_meta","payload":{"cwd":"/w"' + ' '.repeat(5000));
+
+      expect(codexProvider.sessionCwdFromTranscript?.(file)).toBeUndefined();
+    });
+
     it('does not read the whole file — only the head, where session_meta lives', () => {
       const huge = {
         type: 'event_msg',

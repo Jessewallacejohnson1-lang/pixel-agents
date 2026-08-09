@@ -18,5 +18,16 @@ export const CODEX_EXEC_DISPLAY_MAX_LENGTH = 60;
 /** Matches the file header inside an `apply_patch` blob. */
 export const CODEX_PATCH_FILE_HEADER = /^\*\*\* (?:Update|Add|Delete) File:\s*(.+)$/m;
 
-/** Bytes read from the head of a rollout file to find its `session_meta` header. */
-export const SESSION_META_READ_BYTES = 8192;
+/** Chunk size used while reading a rollout file's first line. */
+export const SESSION_META_CHUNK_BYTES = 65_536;
+
+/**
+ * Cap on the first line of a rollout file.
+ *
+ * `session_meta` embeds the agent's full base instructions, so real headers run
+ * to tens of kilobytes -- an 8 KB read truncated them mid-JSON and every Codex
+ * agent fell back to being labelled with a day number. This is generous enough
+ * to cover that and still bounded, so a corrupt file without newlines cannot
+ * pull an arbitrary amount into memory.
+ */
+export const SESSION_META_MAX_BYTES = 1_048_576;
